@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LiveStream Portal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- PeerJS for WebRTC Video Streaming -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --accent: #6366f1;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --success: #22c55e;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); padding-bottom: 50px; }
+    header { background: #111827; padding: 15px 25px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #374151; }
+    .container { max-width: 1100px; margin: 25px auto; padding: 0 15px; }
+    .card { background: var(--card-bg); border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3); }
+    input, button { padding: 10px 14px; border-radius: 6px; border: 1px solid #475569; outline: none; margin-bottom: 10px; width: 100%; font-size: 14px; }
+    input { background: #0f172a; color: #fff; }
+    button { background: var(--accent); color: white; border: none; cursor: pointer; font-weight: bold; }
+    button:hover { opacity: 0.9; }
+    .btn-danger { background: var(--danger); }
+    .btn-secondary { background: #475569; }
+    .flex { display: flex; gap: 10px; }
+    .hidden { display: none; }
+    .video-feed { width: 100%; height: 350px; background: #000; border-radius: 8px; object-fit: cover; }
+    .stream-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+    .stream-item { background: var(--card-bg); border-radius: 8px; padding: 15px; border: 1px solid #334155; position: relative; }
+    .score-badge { position: absolute; top: 25px; right: 25px; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 20px; font-weight: bold; }
+    .vote-controls { display: flex; gap: 10px; margin-top: 10px; }
+    .vote-btn { width: 50%; font-size: 14px; }
+    .auth-box { max-width: 400px; margin: 60px auto; }
+    .link { color: #818cf8; cursor: pointer; text-decoration: underline; font-size: 13px; text-align: center; display: block; margin-top: 5px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h2>🔴 Live Social Hub</h2>
+    <div id="user-nav" class="hidden">
+      <span id="welcome-msg" style="margin-right: 15px;"></span>
+      <button onclick="logout()" class="btn-secondary" style="width: auto; padding: 6px 12px;">Logout</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- AUTH SECTION -->
+    <div id="auth-section" class="card auth-box">
+      <!-- Login -->
+      <div id="login-form">
+        <h3>Login</h3><br>
+        <input type="email" id="login-email" placeholder="Email" required>
+        <input type="password" id="login-pass" placeholder="Password" required>
+        <button onclick="login()">Login</button>
+        <span class="link" onclick="switchAuth('register')">Don't have an account? Register</span>
+        <span class="link" onclick="switchAuth('reset')">Forgot Password? Reset</span>
+      </div>
+
+      <!-- Register -->
+      <div id="register-form" class="hidden">
+        <h3>Register</h3><br>
+        <input type="text" id="reg-username" placeholder="Username" required>
+        <input type="email" id="reg-email" placeholder="Email" required>
+        <input type="password" id="reg-pass" placeholder="Password (plaintext)" required>
+        <button onclick="register()">Create Account</button>
+        <span class="link" onclick="switchAuth('login')">Already have an account? Login</span>
+      </div>
+
+      <!-- Password Reset -->
+      <div id="reset-form" class="hidden">
+        <h3>Reset Password</h3><br>
+        <input type="email" id="reset-email" placeholder="Email" required>
+        <input type="password" id="reset-pass" placeholder="New Password" required>
+        <button onclick="resetPassword()">Set New Password</button>
+        <span class="link" onclick="switchAuth('login')">Back to Login</span>
+      </div>
+    </div>
+
+    <!-- MAIN APP SECTION -->
+    <div id="app-section" class="hidden">
+      <!-- BROADCAST CARD -->
+      <div class="card">
+        <h3>Go Live (Telecast)</h3>
+        <div id="broadcast-setup" style="margin-top: 10px;">
+          <input type="text" id="stream-title" placeholder="Stream Title">
+          <button onclick="startTelecast()">Start Live Telecast</button>
+        </div>
+        <div id="broadcast-active" class="hidden" style="margin-top: 10px;">
+          <video id="local-video" class="video-feed" autoplay muted playsinline></video>
+          <button onclick="stopTelecast()" class="btn-danger" style="margin-top: 10px;">Stop Telecast</button>
+        </div>
+      </div>
+
+      <!-- LIVE STREAM LIST -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+        <h3>Top Live Telecasts (Ranked by Points)</h3>
+        <button onclick="fetchStreams()" style="width: auto; padding: 6px 16px;">↻ Refresh</button>
+      </div>
+      <div id="streams-container" class="stream-grid">
+        <!-- Live streams dynamically rendered here -->
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Replace with your Web App URL if running completely detached/external,
+    // or leave empty string if deployed via Apps Script HTML Service.
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzB1-t5U7x6-cQguoHinQCUhPTx4n4IZVGHhp4o8h02V_Skc-qVrgJTRQjvvN4HtCPgUg/exec"; 
+
+    let currentUser = JSON.parse(localStorage.getItem('user')) || null;
+    let localStream = null;
+    let peer = null;
+    let currentStreamId = null;
+
+    // Helper: Calls backend (either direct gas runner or fetch endpoint)
+    function callAPI(data) {
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        return new Promise((resolve) => {
+          google.script.run
+            .withSuccessHandler((res) => resolve(res))
+            .withFailureHandler((err) => resolve({ success: false, message: err.message }))
+            [getFunctionName(data.action)](...extractArgs(data));
+        });
+      } else {
+        return fetch(SCRIPT_URL, {
+          method: 'POST',
+          body: JSON.stringify(data)
+        }).then(r => r.json());
+      }
+    }
+
+    // Apps Script Runner mapping fallback
+    function getFunctionName(action) {
+      const map = {
+        'register': 'registerUser',
+        'login': 'loginUser',
+        'resetPassword': 'resetPassword',
+        'startStream': 'startStream',
+        'stopStream': 'stopStream',
+        'getStreams': 'getActiveStreams',
+        'voteStream': 'voteStream'
+      };
+      return map[action];
+    }
+
+    function extractArgs(data) {
+      switch (data.action) {
+        case 'register': return [data.email, data.username, data.password];
+        case 'login': return [data.email, data.password];
+        case 'resetPassword': return [data.email, data.newPassword];
+        case 'startStream': return [data.username, data.title, data.peerId];
+        case 'stopStream': return [data.streamId];
+        case 'getStreams': return [];
+        case 'voteStream': return [data.streamId, data.value];
+      }
+    }
+
+    // UI Navigation
+    function switchAuth(view) {
+      document.getElementById('login-form').classList.toggle('hidden', view !== 'login');
+      document.getElementById('register-form').classList.toggle('hidden', view !== 'register');
+      document.getElementById('reset-form').classList.toggle('hidden', view !== 'reset');
+    }
+
+    function updateAuthState() {
+      if (currentUser) {
+        document.getElementById('auth-section').classList.add('hidden');
+        document.getElementById('app-section').classList.remove('hidden');
+        document.getElementById('user-nav').classList.remove('hidden');
+        document.getElementById('welcome-msg').innerText = `Hello, ${currentUser.username}`;
+        initPeer();
+        fetchStreams();
+      } else {
+        document.getElementById('auth-section').classList.remove('hidden');
+        document.getElementById('app-section').classList.add('hidden');
+        document.getElementById('user-nav').classList.add('hidden');
+      }
+    }
+
+    // Auth Actions
+    async function register() {
+      const email = document.getElementById('reg-email').value;
+      const username = document.getElementById('reg-username').value;
+      const password = document.getElementById('reg-pass').value;
+      
+      const res = await callAPI({ action: 'register', email, username, password });
+      if (res.success) {
+        currentUser = res.user;
+        localStorage.setItem('user', JSON.stringify(currentUser));
+        updateAuthState();
+      } else {
+        alert(res.message);
+      }
+    }
+
+    async function login() {
+      const email = document.getElementById('login-email').value;
+      const password = document.getElementById('login-pass').value;
+      
+      const res = await callAPI({ action: 'login', email, password });
+      if (res.success) {
+        currentUser = res.user;
+        localStorage.setItem('user', JSON.stringify(currentUser));
+        updateAuthState();
+      } else {
+        alert(res.message);
+      }
+    }
+
+    async function resetPassword() {
+      const email = document.getElementById('reset-email').value;
+      const newPassword = document.getElementById('reset-pass').value;
+      
+      const res = await callAPI({ action: 'resetPassword', email, newPassword });
+      alert(res.message);
+      if (res.success) switchAuth('login');
+    }
+
+    function logout() {
+      if (localStream) stopTelecast();
+      currentUser = null;
+      localStorage.removeItem('user');
+      updateAuthState();
+    }
+
+    // WebRTC Streaming with PeerJS
+    function initPeer() {
+      if (peer) return;
+      peer = new Peer();
+      
+      // When someone connects to our telecast
+      peer.on('call', (call) => {
+        if (localStream) {
+          call.answer(localStream); // Send stream to viewer
+        }
+      });
+    }
+
+    async function startTelecast() {
+      const title = document.getElementById('stream-title').value.trim() || 'Live Show';
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById('local-video').srcObject = localStream;
+        
+        document.getElementById('broadcast-setup').classList.add('hidden');
+        document.getElementById('broadcast-active').classList.remove('hidden');
+
+        const res = await callAPI({
+          action: 'startStream',
+          username: currentUser.username,
+          title: title,
+          peerId: peer.id
+        });
+
+        if (res.success) {
+          currentStreamId = res.streamId;
+          fetchStreams();
+        }
+      } catch (err) {
+        alert("Camera/Mic access denied or unavailable: " + err.message);
+      }
+    }
+
+    async function stopTelecast() {
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+      document.getElementById('broadcast-setup').classList.remove('hidden');
+      document.getElementById('broadcast-active').classList.add('hidden');
+
+      if (currentStreamId) {
+        await callAPI({ action: 'stopStream', streamId: currentStreamId });
+        currentStreamId = null;
+        fetchStreams();
+      }
+    }
+
+    // Telecast Feed & Viewer
+    async function fetchStreams() {
+      const res = await callAPI({ action: 'getStreams' });
+      const container = document.getElementById('streams-container');
+      container.innerHTML = '';
+
+      if (!res.streams || res.streams.length === 0) {
+        container.innerHTML = '<p style="color:var(--muted)">No streams currently live. Start one above!</p>';
+        return;
+      }
+
+      res.streams.forEach(stream => {
+        const item = document.createElement('div');
+        item.className = 'stream-item';
+        item.innerHTML = `
+          <div class="score-badge">Points: <span id="score-${stream.streamId}">${stream.score}</span></div>
+          <video id="video-${stream.streamId}" class="video-feed" autoplay playsinline controls></video>
+          <div style="margin-top: 10px;">
+            <h4>${escapeHTML(stream.title)}</h4>
+            <p style="color: var(--muted); font-size: 13px;">Host: ${escapeHTML(stream.username)}</p>
+          </div>
+          <div class="vote-controls">
+            <button class="vote-btn" onclick="vote('${stream.streamId}', 1)">+1 Upvote</button>
+            <button class="vote-btn btn-danger" onclick="vote('${stream.streamId}', -1)">-1 Downvote</button>
+          </div>
+        `;
+        container.appendChild(item);
+
+        // Connect viewer to streamer via PeerJS
+        if (stream.peerId !== peer.id) {
+          const call = peer.call(stream.peerId, createEmptyMediaStream());
+          call.on('stream', remoteStream => {
+            const vid = document.getElementById(`video-${stream.streamId}`);
+            if (vid) vid.srcObject = remoteStream;
+          });
+        } else {
+          // If viewing our own telecast card
+          const vid = document.getElementById(`video-${stream.streamId}`);
+          if (vid && localStream) vid.srcObject = localStream;
+        }
+      });
+    }
+
+    // Dummy empty audio stream for PeerJS call handshake
+    function createEmptyMediaStream() {
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const dst = ctx.createMediaStreamDestination();
+      osc.connect(dst);
+      osc.start();
+      const track = dst.stream.getAudioTracks()[0];
+      track.enabled = false;
+      return dst.stream;
+    }
+
+    async function vote(streamId, value) {
+      const res = await callAPI({ action: 'voteStream', streamId, value });
+      if (res.success) {
+        // Instantly refresh list so position rearranges based on points
+        fetchStreams();
+      } else {
+        alert(res.message);
+      }
+    }
+
+    function escapeHTML(str) {
+      return str.replace(/[&<>'"]/g, tag => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+      }[tag] || tag));
+    }
+
+    // Bootstrap
+    window.onload = updateAuthState;
+  </script>
+</body>
+</html>
